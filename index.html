@@ -7,19 +7,19 @@
     <script src="https://accounts.google.com/gsi/client" onload="gisLoaded()" async defer></script>
     <script src="https://apis.google.com/js/api.js" onload="gapiLoaded()" async defer></script>
     <style>
-        :root { --primary: #6366f1; --bg: #f8fafc; --danger: #ef4444; }
+        :root { --primary: #6366f1; --bg: #f8fafc; --danger: #ef4444; --success: #10b981; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg); display: flex; flex-direction: column; align-items: center; padding: 20px; }
         .card { background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); width: 100%; max-width: 500px; }
         h1 { color: #1e293b; text-align: center; margin: 0; }
         .date-display { text-align: center; color: #64748b; margin-bottom: 20px; font-size: 0.9rem; }
         textarea { width: 100%; height: 120px; padding: 12px; border: 2px solid #e2e8f0; border-radius: 10px; margin: 10px 0; box-sizing: border-box; resize: none; font-size: 1rem; }
-        .btn-group { display: flex; gap: 10px; }
-        button { flex: 1; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.2s; }
+        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
+        button { flex: 1; min-width: 120px; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.2s; }
         .btn-save { background: var(--primary); color: white; }
-        .btn-backup { background: #10b981; color: white; }
-        .memory-item { background: #fff; border-left: 4px solid var(--primary); padding: 15px; margin-top: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); width: 100%; max-width: 500px; position: relative; }
+        .btn-sync { background: var(--success); color: white; }
+        .memory-item { background: #fff; border-left: 4px solid var(--primary); padding: 15px; margin-top: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); width: 100%; max-width: 500px; }
         .item-actions { margin-top: 10px; display: flex; gap: 10px; }
-        .btn-small { padding: 5px 10px; font-size: 0.8rem; flex: none; }
+        .btn-small { padding: 5px 10px; font-size: 0.8rem; flex: none; min-width: auto; }
         .btn-edit { background: #f1f5f9; color: #475569; }
         .btn-delete { background: #fee2e2; color: var(--danger); }
     </style>
@@ -32,7 +32,7 @@
     <textarea id="entryInput" placeholder="What's on your mind?"></textarea>
     <div class="btn-group">
         <button class="btn-save" id="saveBtn" onclick="saveEntry()">Save Entry</button>
-        <button class="btn-backup" onclick="handleAuthClick()">Backup to Drive</button>
+        <button class="btn-sync" onclick="handleAuthClick()">Sync with Cloud</button>
     </div>
 </div>
 
@@ -43,30 +43,63 @@
     const SCOPES = 'https://www.googleapis.com/auth/drive.appdata';
     let tokenClient, editIndex = null;
 
-    document.getElementById('currentDate').innerText = new Date().toDateString();
+    // Header Date Setup
+    const headerOptions = { weekday: 'long', year: 'numeric', month: 'short', day: '2-digit' };
+    document.getElementById('currentDate').innerText = new Date().toLocaleDateString('en-US', headerOptions);
 
     function gapiLoaded() { gapi.load('client', () => gapi.client.init({discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest']})); }
-    function gisLoaded() { tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: (resp) => { if (resp.access_token) syncToDrive(resp.access_token); }}); }
+    function gisLoaded() { tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: (resp) => { if (resp.access_token) syncProcess(resp.access_token); }}); }
     function handleAuthClick() { tokenClient.requestAccessToken({ prompt: 'consent' }); }
 
-    async function syncToDrive(token) {
-        const memories = localStorage.getItem('journal_memories') || '[]';
-        const fileContent = new Blob([memories], { type: 'application/json' });
-        const list = await gapi.client.drive.files.list({ spaces: 'appDataFolder', q: "name='memories.json'" });
-        const existingFile = list.result.files[0];
+    async function syncProcess(token) {
+        try {
+            const list = await gapi.client.drive.files.list({ spaces: 'appDataFolder', q: "name='memories.json'", fields: 'files(id)' });
+            const existingFile = list.result.files[0];
+            let cloudData = [];
 
-        if (existingFile) {
-            await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media`, {
-                method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: fileContent
+            if (existingFile) {
+                const response = await fetch(`https://www.googleapis.com/drive/v3/files/${existingFile.id}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+                cloudData = await response.json();
+            }
+
+            let localData = JSON.parse(localStorage.getItem('journal_memories') || '[]');
+            
+            // MASTER MERGE: Deduplicate by text content and fix invalid dates
+            const combined = [...localData, ...cloudData];
+            const uniqueMap = new Map();
+
+            combined.forEach(item => {
+                let d = new Date(item.date);
+                // Self-Healing: If date is broken, fix it to the current time
+                if (isNaN(d.getTime())) {
+                    item.date = new Date().toISOString();
+                }
+                uniqueMap.set(item.text, item);
             });
-        } else {
-            const metadata = { name: 'memories.json', parents: ['appDataFolder'] };
-            const form = new FormData();
-            form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-            form.append('file', fileContent);
-            await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+            
+            const finalData = Array.from(uniqueMap.values());
+            // Sort: Newest entries at the top
+            finalData.sort((a, b) => new Date(b.date) - new Date(a.date));
+            
+            localStorage.setItem('journal_memories', JSON.stringify(finalData));
+            render();
+
+            // Save the "Healed" and Merged data back to Drive
+            const fileContent = new Blob([JSON.stringify(finalData)], { type: 'application/json' });
+            if (existingFile) {
+                await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=media`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: fileContent });
+            } else {
+                const metadata = { name: 'memories.json', parents: ['appDataFolder'] };
+                const form = new FormData();
+                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                form.append('file', fileContent);
+                await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+            }
+            alert("☁️ All entries synced and formatted successfully!");
+        } catch (err) {
+            console.error(err);
+            alert("Sync failed. Check your Test User permissions in Google Console.");
         }
-        alert("☁️ Cloud Sync Successful!");
     }
 
     function saveEntry() {
@@ -76,10 +109,11 @@
 
         if (editIndex !== null) {
             memories[editIndex].text = input.value;
+            memories[editIndex].date = new Date().toISOString(); 
             editIndex = null;
             document.getElementById('saveBtn').innerText = "Save Entry";
         } else {
-            memories.unshift({ text: input.value, date: new Date().toLocaleString() });
+            memories.unshift({ text: input.value, date: new Date().toISOString() });
         }
 
         localStorage.setItem('journal_memories', JSON.stringify(memories));
@@ -96,7 +130,7 @@
     }
 
     function deleteEntry(index) {
-        if (!confirm("Are you sure you want to delete this memory?")) return;
+        if (!confirm("Delete this memory permanently?")) return;
         let memories = JSON.parse(localStorage.getItem('journal_memories') || '[]');
         memories.splice(index, 1);
         localStorage.setItem('journal_memories', JSON.stringify(memories));
@@ -106,16 +140,29 @@
     function render() {
         const list = document.getElementById('memoriesList');
         const memories = JSON.parse(localStorage.getItem('journal_memories') || '[]');
-        list.innerHTML = memories.map((m, i) => `
-            <div class="memory-item">
-                <small style="color: #64748b">${m.date}</small>
-                <p style="margin: 5px 0 0 0; color: #1e293b">${m.text}</p>
-                <div class="item-actions">
-                    <button class="btn-small btn-edit" onclick="editEntry(${i})">Edit</button>
-                    <button class="btn-small btn-delete" onclick="deleteEntry(${i})">Delete</button>
+        
+        // Final Date Format: Saturday, May 09, 2026, 10:45 AM
+        const options = { 
+            weekday: 'long', year: 'numeric', month: 'short', 
+            day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true 
+        };
+        
+        list.innerHTML = memories.map((m, i) => {
+            let d = new Date(m.date);
+            // Extra safety for the display
+            const displayDate = isNaN(d.getTime()) ? "Date Restored" : d.toLocaleString('en-US', options);
+            
+            return `
+                <div class="memory-item">
+                    <small style="color: #64748b">${displayDate}</small>
+                    <p style="margin: 5px 0 0 0; color: #1e293b">${m.text}</p>
+                    <div class="item-actions">
+                        <button class="btn-small btn-edit" onclick="editEntry(${i})">Edit</button>
+                        <button class="btn-small btn-delete" onclick="deleteEntry(${i})">Delete</button>
+                    </div>
                 </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     }
     render();
 </script>
