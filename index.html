@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Pulse | Official</title>
+    <style>
+        :root { --primary: #6c63ff; --bg: #f8f9fa; }
+        body { background: var(--bg); font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; padding: 40px; margin: 0; }
+        .container { background: white; max-width: 600px; width: 100%; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); text-align: center; }
+        #search-bar { width: 100%; padding: 12px; margin-top: 15px; border-radius: 25px; border: 1px solid #dfe6e9; text-align: center; box-sizing: border-box; }
+        textarea { width: 100%; height: 120px; padding: 15px; margin: 15px 0; border: 1px solid #dfe6e9; border-radius: 12px; resize: none; font-size: 1rem; box-sizing: border-box; }
+        .button-group { display: flex; gap: 10px; }
+        button { padding: 15px; border-radius: 10px; border: none; font-weight: bold; cursor: pointer; transition: 0.3s; flex: 2; background: var(--primary); color: white; }
+        #export-btn { background: #eee; color: #636e72; flex: 1; }
+        .entry-card { background: #fff; border-bottom: 1px solid #eee; padding: 20px 0; text-align: left; animation: fadeIn 0.5s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Daily Pulse</h1>
+            <p id="date-display"></p>
+            <input type="text" id="search-bar" placeholder="Search your memories...">
+        </header>
+        <section class="input-area">
+            <select id="mood-input" style="width:100%; padding:10px; border-radius:8px; margin-top:10px;">
+                <option value="😊 Happy">Happy</option>
+                <option value="🚀 Productive">Productive</option>
+                <option value="😴 Tired">Tired</option>
+                <option value="🌿 Calm">Calm</option>
+            </select>
+            <textarea id="journal-input" placeholder="What's on your mind?"></textarea>
+            <div class="button-group">
+                <button id="save-btn">Save Entry</button>
+                <button id="export-btn" onclick="download()">Backup</button>
+            </div>
+        </section>
+        <div id="entries-container"></div>
+    </div>
+    <script>
+        const journalInput = document.getElementById('journal-input');
+        const entriesContainer = document.getElementById('entries-container');
+        document.getElementById('date-display').innerText = new Date().toDateString();
+        let entries = JSON.parse(localStorage.getItem('journalData')) || [];
+
+        function render(data = entries) {
+            entriesContainer.innerHTML = data.length ? "" : "<p style='color:#ccc'>No memories yet.</p>";
+            data.forEach(e => {
+                const div = document.createElement('div');
+                div.className = 'entry-card';
+                div.innerHTML = `<small>${e.date} • ${e.mood}</small><p>${e.text}</p>`;
+                entriesContainer.appendChild(div);
+            });
+        }
+
+        document.getElementById('save-btn').addEventListener('click', () => {
+            if (!journalInput.value.trim()) return;
+            entries.unshift({ text: journalInput.value, mood: document.getElementById('mood-input').value, date: new Date().toLocaleString() });
+            localStorage.setItem('journalData', JSON.stringify(entries));
+            journalInput.value = "";
+            render();
+        });
+
+        document.getElementById('search-bar').addEventListener('input', (e) => {
+            const term = e.target.value.toLowerCase();
+            render(entries.filter(en => en.text.toLowerCase().includes(term)));
+        });
+
+        function download() {
+            const text = entries.map(e => `${e.date}: ${e.text}`).join('\n\n');
+            const blob = new Blob([text], {type: 'text/plain'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'journal.txt';
+            a.click();
+        }
+        render();
+    </script>
+</body>
+</html>
